@@ -42,9 +42,11 @@ def get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
         except sqlite3.ProgrammingError:
             pass
 
-    conn = sqlite3.connect(path, timeout=30)
+    conn = sqlite3.connect(path, timeout=60)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA busy_timeout=60000")  # 60s — survives streaming-mode contention
+    conn.execute("PRAGMA synchronous=NORMAL")  # safe under WAL, much faster commits
+    conn.execute("PRAGMA wal_autocheckpoint=1000")  # checkpoint every ~1000 pages
     conn.row_factory = sqlite3.Row
     _local.connections[path] = conn
     return conn
