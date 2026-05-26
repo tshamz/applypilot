@@ -327,6 +327,7 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         "--model", model,
         "-p",
         "--mcp-config", str(mcp_config_path),
+        "--strict-mcp-config",
         "--permission-mode", "bypassPermissions",
         "--no-session-persistence",
         "--disallowedTools", (
@@ -346,6 +347,9 @@ def run_job(job: dict, port: int, worker_id: int = 0,
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)
     env.pop("CLAUDE_CODE_ENTRYPOINT", None)
+    # Strip so the subprocess uses the user's Claude Code auth (Max plan)
+    # instead of falling through to billed API key usage.
+    env.pop("ANTHROPIC_API_KEY", None)
 
     worker_dir = reset_worker_dir(worker_id)
 
