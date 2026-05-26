@@ -474,6 +474,11 @@ def extract_with_llm(page, url: str) -> dict:
         desc = result.get("full_description")
         apply_url = result.get("application_url")
 
+        # LLMs sometimes emit the literal string "None"/"null" instead of JSON null.
+        # Normalize to real None so downstream code (and the DB) sees a missing value.
+        if isinstance(apply_url, str) and apply_url.strip().lower() in ("", "none", "null", "n/a"):
+            apply_url = None
+
         if desc:
             desc = clean_description(desc)
 
