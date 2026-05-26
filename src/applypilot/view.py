@@ -11,6 +11,9 @@ Generates a self-contained HTML dashboard with:
 from __future__ import annotations
 
 import os
+import platform
+import plistlib
+import subprocess
 import webbrowser
 from html import escape
 from pathlib import Path
@@ -152,7 +155,14 @@ def generate_dashboard(output_path: str | None = None) -> str:
         location = escape(j["location"] or "")
         site = escape(j["site"] or "")
         site_color = colors.get(j["site"] or "", "#6b7280")
-        apply_url = escape(j["application_url"] or "")
+        # Apply URL must be a real http(s) URL — guard against literal "None"/"null"
+        # strings stored by older enrichment runs. Fall back to the listing URL.
+        raw_apply = (j["application_url"] or "").strip()
+        if raw_apply.lower() in ("", "none", "null", "n/a"):
+            raw_apply = ""
+        if raw_apply and not raw_apply.startswith(("http://", "https://")):
+            raw_apply = ""
+        apply_url = escape(raw_apply or j["url"] or "")
 
         # Parse keywords and reasoning from score_reasoning
         reasoning_raw = j["score_reasoning"] or ""
@@ -395,12 +405,50 @@ applyFilters();
     return abs_path
 
 
+def _default_browser_bundle_id_macos() -> str | None:
+    """Return the bundle ID of the user's default browser on macOS, or None.
+
+    Reads the Launch Services preferences to find the app registered as the
+    handler for the `http` URL scheme — i.e. the user's actual default browser,
+    independent of any `.html` file association (which may point at e.g. VS Code).
+    """
+    plist = Path.home() / "Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"
+    if not plist.exists():
+        return None
+    try:
+        # plistlib needs binary plists in binary mode; secure.plist is binary.
+        with plist.open("rb") as f:
+            data = plistlib.load(f)
+    except (OSError, plistlib.InvalidFileException):
+        return None
+
+    for handler in data.get("LSHandlers", []):
+        if handler.get("LSHandlerURLScheme") == "http":
+            return handler.get("LSHandlerRoleAll")
+    return None
+
+
 def open_dashboard(output_path: str | None = None) -> None:
     """Generate the dashboard and open it in the default browser.
+
+    On macOS, this explicitly resolves the default *browser* via Launch Services
+    rather than relying on the `.html` file association, which may be set to a
+    non-browser app (e.g. VS Code).
 
     Args:
         output_path: Where to write the HTML file. Defaults to ~/.applypilot/dashboard.html.
     """
     path = generate_dashboard(output_path)
     console.print("[dim]Opening in browser...[/dim]")
-    webbrowser.open(f"file:///{path}")
+
+    if platform.system() == "Darwin":
+        bundle_id = _default_browser_bundle_id_macos()
+        if bundle_id:
+            try:
+                subprocess.run(["open", "-b", bundle_id, str(path)], check=True)
+                return
+            except (subprocess.SubprocessError, FileNotFoundError):
+                pass  # fall through to webbrowser
+
+    # Linux/Windows (and macOS fallback): Path.as_uri() produces a correct file:// URL.
+    webbrowser.open(Path(path).as_uri())
