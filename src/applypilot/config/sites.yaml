@@ -36,13 +36,10 @@ blocked_sso:
 # Used by detail enrichment to resolve relative URLs scraped from sites.
 # Sites not listed here (or with null) cannot have relative URLs resolved.
 base_urls:
-  "Job Bank Canada": "https://www.jobbank.gc.ca"
-  "CareerJet Canada": "https://www.careerjet.ca"
   "BuiltIn Remote": "https://builtin.com"
   "Hacker News Jobs": "https://news.ycombinator.com/"
   "RemoteOK": null
   "WelcomeToTheJungle": null
-  "Workopolis": "https://www.workopolis.com"
   "WeWorkRemotely": "https://weworkremotely.com"
   "Startup.jobs": "https://startup.jobs"
   "Nodesk": "https://nodesk.co"
@@ -51,29 +48,22 @@ base_urls:
   "Arc.dev": "https://arc.dev"
   "Himalayas": "https://himalayas.app"
   "Techstars Jobs": "https://www.techstars.com"
-  "Randstad Canada": "https://www.randstad.ca/jobs/search/"
+  "Randstad USA": "https://www.randstadusa.com"
+  "CareerJet": "https://www.careerjet.com"
 
 sites:
   # ── Searchable sites (URL includes query + location params) ──────────
-  # Canada-specific
-  - name: "Eluta"
-    url: "https://www.eluta.ca/search?q={query_encoded}&l={location_encoded}"
-    type: search
 
   - name: "Talent.com"
     url: "https://www.talent.com/jobs?k={query_encoded}&l={location_encoded}"
     type: search
 
-  - name: "Randstad Canada"
-    url: "https://www.randstad.ca/jobs/?keywords={query_encoded}&location={location_encoded}"
+  - name: "Randstad USA"
+    url: "https://www.randstadusa.com/jobs/search/?keywords={query_encoded}&address={location_encoded}"
     type: search
 
-  - name: "CareerJet Canada"
-    url: "https://www.careerjet.ca/search/jobs?s={query_encoded}&l={location_encoded}"
-    type: search
-
-  - name: "Job Bank Canada"
-    url: "https://www.jobbank.gc.ca/jobsearch/jobsearch?searchstring={query_encoded}&locationstring={location_encoded}&fage=2&sort=D"
+  - name: "CareerJet"
+    url: "https://www.careerjet.com/search/jobs?s={query_encoded}&l={location_encoded}"
     type: search
 
   # General tech (with search)
@@ -153,7 +143,7 @@ sites:
     type: static
 
   - name: "Wellfound"
-    url: "https://wellfound.com/role/l/software-engineer/canada"
+    url: "https://wellfound.com/role/l/software-engineer/united-states"
     type: static
 
   - name: "Arc.dev"
