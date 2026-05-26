@@ -94,7 +94,7 @@ def score_job(resume_text: str, job: dict) -> dict:
 
     try:
         client = get_client()
-        response = client.chat(messages, max_tokens=512, temperature=0.2)
+        response = client.chat(messages, max_tokens=8192, temperature=0.2)
         return _parse_score_response(response)
     except Exception as e:
         log.error("LLM error scoring job '%s': %s", job.get("title", "?"), e)
@@ -137,6 +137,10 @@ def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
     errors = 0
     results: list[dict] = []
 
+    # Commit every COMMIT_EVERY scored jobs so a mid-run kill loses at most
+    # that many scores instead of the entire batch.
+    COMMIT_EVERY = 10
+
     for job in jobs:
         result = score_job(resume_text, job)
         result["url"] = job["url"]
@@ -147,18 +151,21 @@ def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
 
         results.append(result)
 
+        # Persist immediately so progress survives a kill / crash.
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE jobs SET fit_score = ?, score_reasoning = ?, scored_at = ? WHERE url = ?",
+            (result["score"], f"{result['keywords']}\n{result['reasoning']}", now, result["url"]),
+        )
+        if completed % COMMIT_EVERY == 0:
+            conn.commit()
+
         log.info(
             "[%d/%d] score=%d  %s",
             completed, len(jobs), result["score"], job.get("title", "?")[:60],
         )
 
-    # Write scores to DB
-    now = datetime.now(timezone.utc).isoformat()
-    for r in results:
-        conn.execute(
-            "UPDATE jobs SET fit_score = ?, score_reasoning = ?, scored_at = ? WHERE url = ?",
-            (r["score"], f"{r['keywords']}\n{r['reasoning']}", now, r["url"]),
-        )
+    # Final commit for the tail of the batch (< COMMIT_EVERY remaining).
     conn.commit()
 
     elapsed = time.time() - t0
