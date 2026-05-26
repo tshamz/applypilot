@@ -41,12 +41,34 @@ def load_employers() -> dict:
 # -- Location filtering from search config -----------------------------------
 
 def _load_location_filter(search_cfg: dict | None = None):
-    """Load location accept/reject lists from search config."""
+    """Load location accept/reject lists from search config.
+
+    Supports two schemas (preferring the nested form, which matches the
+    bundled `searches.example.yaml`):
+
+      Nested:
+        location:
+          accept_patterns: [...]
+          reject_patterns: [...]
+
+      Flat (legacy):
+        location_accept: [...]
+        location_reject_non_remote: [...]
+    """
     if search_cfg is None:
         search_cfg = config.load_search_config()
 
-    accept = search_cfg.get("location_accept", [])
-    reject = search_cfg.get("location_reject_non_remote", [])
+    location = search_cfg.get("location") or {}
+    accept = (
+        location.get("accept_patterns")
+        or search_cfg.get("location_accept")
+        or []
+    )
+    reject = (
+        location.get("reject_patterns")
+        or search_cfg.get("location_reject_non_remote")
+        or []
+    )
     return accept, reject
 
 
