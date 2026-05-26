@@ -165,7 +165,7 @@ def generate_cover_letter(
             )},
         ]
 
-        letter = client.chat(messages, max_tokens=1024, temperature=0.7)
+        letter = client.chat(messages, max_tokens=8192, temperature=0.7)
         letter = sanitize_text(letter)  # auto-fix em dashes, smart quotes
         letter = _strip_preamble(letter)  # remove any "Here is the letter:" prefix
 
@@ -277,24 +277,22 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
             results.append(result)
             log.error("%d/%d [ERROR] %s -- %s", completed, len(jobs), job["title"][:40], e)
 
-    # Persist to DB: increment attempt counter for ALL, save path only for successes
-    now = datetime.now(timezone.utc).isoformat()
-    saved = 0
-    for r in results:
-        if r.get("path"):
+        # Persist this job's outcome immediately so a kill/crash doesn't lose work.
+        _now = datetime.now(timezone.utc).isoformat()
+        if result.get("path"):
             conn.execute(
                 "UPDATE jobs SET cover_letter_path=?, cover_letter_at=?, "
                 "cover_attempts=COALESCE(cover_attempts,0)+1 WHERE url=?",
-                (r["path"], now, r["url"]),
+                (result["path"], _now, result["url"]),
             )
-            saved += 1
         else:
             conn.execute(
                 "UPDATE jobs SET cover_attempts=COALESCE(cover_attempts,0)+1 WHERE url=?",
-                (r["url"],),
+                (result["url"],),
             )
-    conn.commit()
+        conn.commit()
 
+    saved = sum(1 for r in results if r.get("path"))
     elapsed = time.time() - t0
     log.info("Cover letters done in %.1fs: %d generated, %d errors", elapsed, saved, error_count)
 
