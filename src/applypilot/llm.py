@@ -242,11 +242,17 @@ class LLMClient:
                     else:
                         wait = min(_RATE_LIMIT_BASE_WAIT * (2 ** attempt), 60)
 
+                    # Provider-aware tip — derived from the actual base URL, not hardcoded.
+                    base = getattr(self, "base_url", "") or ""
+                    if "googleapis.com" in base or "generativelanguage" in base:
+                        tip = "Gemini free tier = 15 RPM; Tier-1 paid = 1000 RPM / 10K RPD"
+                    elif "openai.com" in base:
+                        tip = "OpenAI Tier-1 gpt-4o-mini = 500 RPM / 200K TPM / 10K RPD"
+                    else:
+                        tip = "Check your provider's rate limits"
                     log.warning(
-                        "LLM rate limited (HTTP %s). Waiting %ds before retry %d/%d. "
-                        "Tip: Gemini free tier = 15 RPM. Consider a paid account "
-                        "or switching to a local model.",
-                        resp.status_code, wait, attempt + 1, _MAX_RETRIES,
+                        "LLM rate limited (HTTP %s). Waiting %ds before retry %d/%d. Tip: %s.",
+                        resp.status_code, wait, attempt + 1, _MAX_RETRIES, tip,
                     )
                     time.sleep(wait)
                     continue
