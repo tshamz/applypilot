@@ -280,10 +280,24 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
         # Persist this job's outcome immediately so a kill/crash doesn't lose work.
         _now = datetime.now(timezone.utc).isoformat()
         if result.get("path"):
+            # Cheap employer-name extraction from the letter we just generated.
+            # No LLM call here — Tier-1 regex only (the cover letter mentions the
+            # company by name multiple times; regex catches it ~100% of the time).
+            from applypilot.enrichment.employer import (
+                extract_employer_name, site_is_aggregator,
+            )
+            if site_is_aggregator(job.get("site")):
+                employer = extract_employer_name(
+                    job, cover_letter_text=letter, allow_llm=False,
+                )
+            else:
+                employer = job.get("site")
+
             conn.execute(
                 "UPDATE jobs SET cover_letter_path=?, cover_letter_at=?, "
+                "employer_name=COALESCE(?, employer_name), "
                 "cover_attempts=COALESCE(cover_attempts,0)+1 WHERE url=?",
-                (result["path"], _now, result["url"]),
+                (result["path"], _now, employer, result["url"]),
             )
         else:
             conn.execute(

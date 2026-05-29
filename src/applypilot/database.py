@@ -122,6 +122,9 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             cover_letter_at       TEXT,
             cover_attempts        INTEGER DEFAULT 0,
 
+            -- Employer identity (real hiring company, not the scrape source)
+            employer_name         TEXT,
+
             -- Application stage
             applied_at            TEXT,
             apply_status          TEXT,
@@ -172,6 +175,8 @@ _ALL_COLUMNS: dict[str, str] = {
     "cover_letter_path": "TEXT",
     "cover_letter_at": "TEXT",
     "cover_attempts": "INTEGER DEFAULT 0",
+    # Employer identity (real hiring company, not the scrape source)
+    "employer_name": "TEXT",
     # Application
     "applied_at": "TEXT",
     "apply_status": "TEXT",
