@@ -615,6 +615,15 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
                 release_lock(job["url"])
                 add_event(f"[W{worker_id}] Skipped: {job['title'][:30]}")
                 continue
+            elif result == "applied" and dry_run:
+                # Dry-run produced RESULT:APPLIED but no actual submission
+                # happened. Don't mark the row applied — that would prevent
+                # a real apply later. Just release the lock and move on.
+                release_lock(job["url"])
+                add_event(f"[W{worker_id}] Dry-run complete: {job['title'][:30]}")
+                applied += 1  # still count for run-summary purposes
+                update_state(worker_id, jobs_applied=applied,
+                             jobs_done=applied + failed)
             elif result == "applied":
                 mark_result(job["url"], "applied", duration_ms=duration_ms)
                 applied += 1
