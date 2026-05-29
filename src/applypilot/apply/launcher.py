@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from rich.console import Console
@@ -206,6 +206,36 @@ def release_lock(url: str) -> None:
         (url,),
     )
     conn.commit()
+
+
+# How long a row can sit in `apply_status='in_progress'` before we assume the
+# worker that claimed it is dead. Real applies usually finish in 3-7 min;
+# 30 min is conservative enough that we don't reap healthy in-flight work but
+# tight enough that crashed/killed runs don't permanently block a job.
+STALE_LOCK_MINUTES = 30
+
+
+def sweep_stale_locks(max_age_minutes: int = STALE_LOCK_MINUTES) -> int:
+    """Reset `in_progress` rows whose worker has gone silent.
+
+    Called at apply startup. A dead worker (Ctrl+C kill, OS kill, crash,
+    parent harness restart) leaves its row pinned `in_progress` with no
+    process actually working on it. Without this, that row is permanently
+    skipped on every future apply run.
+
+    Returns the number of rows that were reset.
+    """
+    conn = get_connection()
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).isoformat()
+    cur = conn.execute(
+        "UPDATE jobs SET apply_status = NULL, agent_id = NULL, "
+        "apply_error = 'stale_lock_reaped' "
+        "WHERE apply_status = 'in_progress' AND "
+        "(last_attempted_at IS NULL OR last_attempted_at < ?)",
+        (cutoff,),
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 # ---------------------------------------------------------------------------
@@ -689,6 +719,12 @@ def main(limit: int = 1, target_url: str | None = None,
 
     config.ensure_dirs()
     console = Console()
+
+    # Sweep stale locks from dead workers (Ctrl+C kills, harness restarts,
+    # crashes) so their jobs aren't permanently blocked. Idempotent.
+    reaped = sweep_stale_locks()
+    if reaped:
+        console.print(f"[dim]Reaped {reaped} stale `in_progress` lock(s) from a previous run.[/dim]")
 
     if continuous:
         effective_limit = 0
