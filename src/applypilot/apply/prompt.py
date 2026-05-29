@@ -16,6 +16,84 @@ from applypilot import config
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _yes_no(value) -> str:
+    """Normalize a boolean / "Yes" / "No" / "true" / "false" to "Yes" or "No".
+
+    Profile fields are a mix of booleans (JSON-native) and Yes/No strings.
+    Forms expect "Yes" / "No" so we normalize at render time.
+    """
+    if value is True:
+        return "Yes"
+    if value is False:
+        return "No"
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("yes", "true", "y", "t", "1"):
+            return "Yes"
+        if v in ("no", "false", "n", "f", "0"):
+            return "No"
+        return value  # already a meaningful string; pass through
+    return "See profile"
+
+
+def _resolve_display_name(personal: dict) -> str:
+    """Return the candidate's preferred public name.
+
+    Handles all three reasonable shapes:
+      full_name="Tyler Shambora", preferred_name=""           -> "Tyler Shambora"
+      full_name="Peter Shambora", preferred_name="Tyler Shambora" -> "Tyler Shambora"
+      full_name="Peter Shambora", preferred_name="Tyler"      -> "Tyler Shambora"
+    Never doubles the last name (the previous code produced "Tyler Shambora Shambora").
+    """
+    full_name = personal.get("full_name", "").strip()
+    preferred = (personal.get("preferred_name") or "").strip()
+    if not preferred:
+        return full_name
+    if " " in preferred:
+        return preferred  # already a full preferred name; trust it
+    if " " in full_name:
+        last = full_name.split()[-1]
+        return f"{preferred} {last}".strip()
+    return preferred
+
+
+def _clean_accept_patterns(patterns: list[str]) -> list[str]:
+    """Filter searches.yaml accept_patterns down to specific city names.
+
+    The patterns serve two purposes the prompt should NOT mix:
+      - Country-level patterns ("United States", "USA", " US") match remote-US
+        roles during discovery. They should NOT appear in the prompt's "hybrid
+        or onsite in X" list -- the candidate doesn't want "hybrid in the US"
+        anywhere, only in specific cities.
+      - Substring artifacts (", CA", "US ") are matching hacks, not real names.
+
+    Keep only proper-noun city/region names for the prompt's onsite list.
+    """
+    country_level = {"united states", "usa", "us", "remote", "anywhere"}
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for p in patterns:
+        if not isinstance(p, str):
+            continue
+        s = p.strip().lstrip(",").strip()
+        if not s or len(s) < 3:
+            continue
+        if s.lower() in country_level:
+            continue
+        # Skip bare 2-letter state codes (only valid in ", XX" form for matching).
+        if len(s) == 2 and s.isupper():
+            continue
+        if s.lower() in seen:
+            continue
+        seen.add(s.lower())
+        cleaned.append(s)
+    return cleaned
+
+
 def _build_profile_summary(profile: dict) -> str:
     """Format the applicant profile section of the prompt.
 
@@ -56,8 +134,8 @@ def _build_profile_summary(profile: dict) -> str:
         lines.append(f"Website: {personal['website_url']}")
 
     # Work authorization
-    lines.append(f"Work Auth: {work_auth.get('legally_authorized_to_work', 'See profile')}")
-    lines.append(f"Sponsorship Needed: {work_auth.get('require_sponsorship', 'See profile')}")
+    lines.append(f"Work Auth: {_yes_no(work_auth.get('legally_authorized_to_work'))}")
+    lines.append(f"Sponsorship Needed: {_yes_no(work_auth.get('require_sponsorship'))}")
     if work_auth.get("work_permit_type"):
         lines.append(f"Work Permit: {work_auth['work_permit_type']}")
 
@@ -73,6 +151,9 @@ def _build_profile_summary(profile: dict) -> str:
 
     # Availability
     lines.append(f"Available: {avail.get('earliest_start_date', 'Immediately')}")
+    lines.append(f"Available for Full-Time: {_yes_no(avail.get('available_for_full_time', True))}")
+    lines.append(f"Available for Contract: {_yes_no(avail.get('available_for_contract', False))}")
+    lines.append(f"Open to Relocation: {_yes_no(avail.get('open_to_relocation', False))}")
 
     # Standard responses
     lines.extend([
@@ -93,88 +174,131 @@ def _build_profile_summary(profile: dict) -> str:
 
 
 def _build_location_check(profile: dict, search_config: dict) -> str:
-    """Build the location eligibility check section of the prompt.
+    """Build the eligibility check section of the prompt.
 
-    Uses the accept_patterns from search config to determine which cities
-    are acceptable for hybrid/onsite roles.
+    Covers work-type (full-time vs contract), location, and "nearshore"
+    employer-location traps. All three are quick-reject signals worth
+    checking before any form-fill work.
     """
     personal = profile["personal"]
     location_cfg = search_config.get("location", {})
     accept_patterns = location_cfg.get("accept_patterns", [])
     primary_city = personal.get("city", location_cfg.get("primary", "your city"))
 
-    # Build the list of acceptable cities for hybrid/onsite
-    if accept_patterns:
-        city_list = ", ".join(accept_patterns)
-    else:
-        city_list = primary_city
+    cleaned = _clean_accept_patterns(accept_patterns)
+    city_list = ", ".join(cleaned) if cleaned else primary_city
 
-    return f"""== LOCATION CHECK (do this FIRST before any form) ==
-Read the job page. Determine the work arrangement. Then decide:
-- "Remote" or "work from anywhere" -> ELIGIBLE. Apply.
-- "Hybrid" or "onsite" in {city_list} -> ELIGIBLE. Apply.
-- "Hybrid" or "onsite" in another city BUT the posting also says "remote OK" or "remote option available" -> ELIGIBLE. Apply.
-- "Onsite only" or "hybrid only" in any city outside the list above with NO remote option -> NOT ELIGIBLE. Stop immediately. Output RESULT:FAILED:not_eligible_location
-- City is overseas (India, Philippines, Europe, etc.) with no remote option -> NOT ELIGIBLE. Output RESULT:FAILED:not_eligible_location
-- Cannot determine location -> Continue applying. If a screening question reveals it's non-local onsite, answer honestly and let the system reject if needed.
-Do NOT fill out forms for jobs that are clearly onsite in a non-acceptable location. Check EARLY, save time."""
+    return f"""== ELIGIBILITY CHECK (do this FIRST -- before any form-fill) ==
+Read the job description carefully. ALL three checks below must pass. If any one fails, output the corresponding RESULT and stop. Do NOT submit applications for jobs you're not eligible for.
+
+--- 1. WORK TYPE ---
+- "Full-time" / "Permanent" / no employment type mentioned -> OK.
+- "Contract" / "Contract-to-hire" / "Freelance" / "1099" / "C2C" / "Temp" -> NOT ELIGIBLE. Output RESULT:FAILED:contract_role
+- "Part-time only" (no full-time option) -> NOT ELIGIBLE. Output RESULT:FAILED:part_time_only
+- Title contains "$XX/hr", "/hour", "Hourly", "(Contract)", "(Freelance)" -> NOT ELIGIBLE.
+- Visible "Contract" pill / badge on the job listing page (LinkedIn, Indeed, etc.) -> NOT ELIGIBLE.
+
+--- 2. LOCATION ---
+- "Remote" / "work from anywhere" (in the US) -> OK.
+- "Hybrid" or "onsite" in {city_list} -> OK.
+- "Hybrid" or "onsite" in another city BUT the posting also says "remote OK" -> OK.
+- "Onsite only" / "hybrid only" outside the cities above, no remote option -> NOT ELIGIBLE. Output RESULT:FAILED:not_eligible_location
+- Listed city is overseas (India, Philippines, Europe, LATAM, etc.) with no US-remote option -> NOT ELIGIBLE.
+
+--- 3. EMPLOYER / "NEARSHORE" TRAP ---
+Some jobs say "Remote" but the EMPLOYER is hiring nearshore talent for North American clients -- they only want non-US workers. Red flags in the description:
+- "nearshore" / "near-shore" / "offshore"
+- "Latin America" / "LATAM" / "for North American clients" / "for US-based clients"
+- A "Latin America city" / "country of residence" field asking for a non-US location.
+- Company explicitly headquartered in LATAM/India/PH and the role description targets their region.
+Any of the above -> NOT ELIGIBLE. Output RESULT:FAILED:nearshore_role
+
+Cannot determine after a careful read? -> Continue, but answer screening questions honestly. Let the form reject you if needed."""
 
 
 def _build_salary_section(profile: dict) -> str:
     """Build the salary negotiation instructions.
 
-    Adapts floor, range, and currency from the profile's compensation section.
+    Reads target / floor / ceiling from the profile's compensation section so
+    that "floor" actually means salary_range_min (the lowest acceptable
+    number), not salary_expectation (the desired number). Earlier behavior
+    conflated the two and rejected anything below the target.
     """
     comp = profile["compensation"]
     currency = comp.get("salary_currency", "USD")
-    floor = comp["salary_expectation"]
-    range_min = comp.get("salary_range_min", floor)
-    range_max = comp.get("salary_range_max", str(int(floor) + 20000) if floor.isdigit() else floor)
+    target = comp["salary_expectation"]
+    range_min = comp.get("salary_range_min", target)
+    range_max = comp.get("salary_range_max",
+                         str(int(target) + 50000) if target.isdigit() else target)
     conversion_note = comp.get("currency_conversion_note", "")
 
-    # Compute example hourly rates at 3 salary levels
+    # Compute example hourly rates at floor / target / ceiling.
     try:
-        floor_int = int(floor)
         examples = [
-            (f"${floor_int // 1000}K", floor_int // 2080),
-            (f"${(floor_int + 25000) // 1000}K", (floor_int + 25000) // 2080),
-            (f"${(floor_int + 55000) // 1000}K", (floor_int + 55000) // 2080),
+            (f"${int(range_min) // 1000}K", int(range_min) // 2080),
+            (f"${int(target)    // 1000}K", int(target)    // 2080),
+            (f"${int(range_max) // 1000}K", int(range_max) // 2080),
         ]
         hourly_line = ", ".join(f"{sal} = ${hr}/hr" for sal, hr in examples)
     except (ValueError, TypeError):
         hourly_line = "Divide annual salary by 2080"
 
-    # Currency conversion guidance
     if conversion_note:
         convert_line = f"Posting is in a different currency? -> {conversion_note}"
     else:
-        convert_line = "Posting is in a different currency? -> Target midpoint of their range. Convert if needed."
+        convert_line = "Posting is in a different currency? -> Convert their midpoint to USD; answer with their midpoint if it lands inside your range."
 
     return f"""== SALARY (think, don't just copy) ==
-${floor} {currency} is the FLOOR. Never go below it. But don't always use it either.
+Target: ${target} {currency}. Acceptable floor: ${range_min} {currency} (never below). Ceiling for ranges: ${range_max} {currency}.
 
 Decision tree:
-1. Job posting shows a range (e.g. "$120K-$160K")? -> Answer with the MIDPOINT ($140K).
-2. Title says Senior, Staff, Lead, Principal, Architect, or level II/III/IV? -> Minimum $110K {currency}. Use midpoint of posted range if higher.
-3. {convert_line}
-4. No salary info anywhere? -> Use ${floor} {currency}.
-5. Asked for a range? -> Give posted midpoint minus 10% to midpoint plus 10%. No posted range? -> "${range_min}-${range_max} {currency}".
+1. Asked for a single number with no posted range? -> ${target} {currency}.
+2. Asked for a range with no posted range? -> "${range_min}-${range_max} {currency}".
+3. Job posting shows their range?
+   a. Their range overlaps yours -> answer with the midpoint of their range (assuming above ${range_min}).
+   b. Their max is below ${range_min} -> answer with ${range_min}. The system may reject; that's fine.
+   c. Their entire range is above ${range_max} -> answer with their midpoint.
+4. Title says Senior / Staff / Lead / Principal / Architect / level II+ -> never answer below ${target} {currency} unless explicitly capped by their posted max.
+5. {convert_line}
 6. Hourly rate? -> Divide your annual answer by 2080. ({hourly_line})"""
 
 
 def _build_screening_section(profile: dict) -> str:
-    """Build the screening questions guidance section."""
+    """Build the screening questions guidance section.
+
+    Honors the profile for relocation and EEO -- previous behavior hardcoded
+    "cannot relocate" and "Decline to self-identify" regardless of profile.
+    """
     personal = profile["personal"]
     exp = profile.get("experience", {})
+    avail = profile.get("availability", {})
+    eeo = profile.get("eeo_voluntary", {})
     city = personal.get("city", "their city")
     years = exp.get("years_of_experience_total", "multiple")
     target_role = exp.get("target_role", personal.get("current_job_title", "software engineer"))
     work_auth = profile["work_authorization"]
 
+    # Relocation
+    if avail.get("open_to_relocation"):
+        relocation_line = f"Location/relocation: lives in {city}, open to relocation for the right role."
+    else:
+        relocation_line = f"Location/relocation: lives in {city}, not actively looking to relocate."
+
+    # EEO -- write out exactly what the profile says. If a field is "Decline to
+    # self-identify" or similar, the agent will paste that verbatim. If the
+    # candidate disclosed, the agent uses that.
+    eeo_lines = [
+        f'  - Gender: "{eeo.get("gender", "Decline to self-identify")}"',
+        f'  - Race/Ethnicity: "{eeo.get("race_ethnicity", "Decline to self-identify")}"',
+        f'  - Veteran Status: "{eeo.get("veteran_status", "Decline to self-identify")}"',
+        f'  - Disability Status: "{eeo.get("disability_status", "Decline to self-identify")}"',
+    ]
+    eeo_block = "\n".join(eeo_lines)
+
     return f"""== SCREENING QUESTIONS (be strategic) ==
 Hard facts -> answer truthfully from the profile. No guessing. This includes:
-  - Location/relocation: lives in {city}, cannot relocate
-  - Work authorization: {work_auth.get('legally_authorized_to_work', 'see profile')}
+  - {relocation_line}
+  - Work authorization: {_yes_no(work_auth.get('legally_authorized_to_work'))}
   - Citizenship, clearance, licenses, certifications: answer from profile only
   - Criminal/background: answer from profile only
 
@@ -182,7 +306,8 @@ Skills and tools -> be confident. This candidate is a {target_role} with {years}
 
 Open-ended questions ("Why do you want this role?", "Tell us about yourself", "What interests you?") -> Write 2-3 sentences. Be specific to THIS job. Reference something from the job description. Connect it to a real achievement from the resume. No generic fluff. No "I am passionate about..." -- sound like a real person.
 
-EEO/demographics -> "Decline to self-identify" or "Prefer not to say" for everything."""
+EEO / voluntary self-identification -> use the candidate's stated answers verbatim:
+{eeo_block}"""
 
 
 def _build_hard_rules(profile: dict) -> str:
@@ -191,13 +316,12 @@ def _build_hard_rules(profile: dict) -> str:
     work_auth = profile["work_authorization"]
 
     full_name = personal["full_name"]
-    preferred_name = personal.get("preferred_name", full_name.split()[0])
-    preferred_last = full_name.split()[-1] if " " in full_name else ""
-    display_name = f"{preferred_name} {preferred_last}".strip() if preferred_last else preferred_name
+    display_name = _resolve_display_name(personal)
+    preferred_name = (personal.get("preferred_name") or "").strip()
 
-    # Build work auth rule dynamically
-    auth_info = work_auth.get("legally_authorized_to_work", "")
-    sponsorship = work_auth.get("require_sponsorship", "")
+    # Build work auth rule dynamically. Render booleans as Yes/No so the agent
+    # never has to guess what "True"/"False" mean on a form.
+    sponsorship = _yes_no(work_auth.get("require_sponsorship"))
     permit_type = work_auth.get("work_permit_type", "")
 
     work_auth_rule = "Work auth: Answer truthfully from profile."
@@ -205,7 +329,7 @@ def _build_hard_rules(profile: dict) -> str:
         work_auth_rule = f"Work auth: {permit_type}. Sponsorship needed: {sponsorship}."
 
     name_rule = f'Name: Legal name = {full_name}.'
-    if preferred_name and preferred_name != full_name.split()[0]:
+    if preferred_name and preferred_name != full_name:
         name_rule += f' Preferred name = {preferred_name}. Use "{display_name}" unless a field specifically says "legal name".'
 
     return f"""== HARD RULES (never break these) ==
@@ -502,10 +626,8 @@ def build_prompt(job: dict, tailored_resume: str,
     from applypilot.config import load_blocked_sso
     blocked_sso = load_blocked_sso()
 
-    # Preferred display name
-    preferred_name = personal.get("preferred_name", full_name.split()[0])
-    last_name = full_name.split()[-1] if " " in full_name else ""
-    display_name = f"{preferred_name} {last_name}".strip()
+    # Preferred display name (same logic as _build_hard_rules)
+    display_name = _resolve_display_name(personal)
 
     # Dry-run: override submit instruction
     if dry_run:
@@ -513,12 +635,18 @@ def build_prompt(job: dict, tailored_resume: str,
     else:
         submit_instruction = "BEFORE clicking Submit/Apply, take a snapshot and review EVERY field on the page. Verify all data matches the APPLICANT PROFILE and TAILORED RESUME -- name, email, phone, location, work auth, resume uploaded, cover letter if applicable. If anything is wrong or missing, fix it FIRST. Only click Submit after confirming everything is correct."
 
+    # Prefer the real hiring employer (resolved during cover-letter generation
+    # for aggregator-sourced jobs) over the scrape source. Falls back to site
+    # for jobs from Workday/Greenhouse/direct sources where site IS the employer.
+    company = (job.get("employer_name") or job.get("site") or "Unknown").strip()
+
     prompt = f"""You are an autonomous job application agent. Your ONE mission: get this candidate an interview. You have all the information and tools. Think strategically. Act decisively. Submit the application.
 
 == JOB ==
 URL: {job.get('application_url') or job['url']}
 Title: {job['title']}
-Company: {job.get('site', 'Unknown')}
+Company: {company}
+Source: {job.get('site', 'Unknown')}
 Fit Score: {job.get('fit_score', 'N/A')}/10
 
 == FILES ==
@@ -591,6 +719,9 @@ RESULT:CAPTCHA -- blocked by unsolvable captcha
 RESULT:LOGIN_ISSUE -- could not sign in or create account
 RESULT:FAILED:not_eligible_location -- onsite outside acceptable area, no remote option
 RESULT:FAILED:not_eligible_work_auth -- requires unauthorized work location
+RESULT:FAILED:contract_role -- job is contract / freelance / 1099 / hourly, not full-time
+RESULT:FAILED:part_time_only -- job is part-time with no full-time option
+RESULT:FAILED:nearshore_role -- employer is hiring nearshore/LATAM talent for US clients
 RESULT:FAILED:reason -- any other failure (brief reason)
 
 == BROWSER EFFICIENCY ==
