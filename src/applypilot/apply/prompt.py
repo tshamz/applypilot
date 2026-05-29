@@ -244,11 +244,27 @@ Read the job description carefully. ALL three checks below must pass. If any one
 - Visible "Contract" pill / badge on the job listing page (LinkedIn, Indeed, etc.) -> NOT ELIGIBLE.
 
 --- 2. LOCATION ---
-- "Remote" / "work from anywhere" (in the US) -> OK.
+- "Remote" / "work from anywhere" -> OK *only if* the posting does not restrict
+  remote to a specific non-US country. Read carefully -- "Remote" alone is OK,
+  but "Remote - Canada" / "Remote (Canada)" / "Remote in Canada" / "Canada
+  Remote" / "Remote, Toronto" / "Remote within EMEA" / "Remote UK only" etc.
+  are country-bound remotes the candidate is NOT eligible for.
 - "Hybrid" or "onsite" in {city_list} -> OK.
 - "Hybrid" or "onsite" in another city BUT the posting also says "remote OK" -> OK.
 - "Onsite only" / "hybrid only" outside the cities above, no remote option -> NOT ELIGIBLE. Output RESULT:FAILED:not_eligible_location
-- Listed city is overseas (India, Philippines, Europe, LATAM, etc.) with no US-remote option -> NOT ELIGIBLE.
+- Listed city is overseas (India, Philippines, Europe, LATAM, Canada, etc.)
+  with no US-remote option -> NOT ELIGIBLE.
+
+--- 2b. CURRENCY / COUNTRY-RESTRICTED PAY SIGNAL ---
+A salary posted only in a non-USD currency (CAD, GBP, EUR, AUD, INR, MXN,
+BRL, etc.) without a USD equivalent is a strong signal the role is for that
+country's residents only. Examples:
+- "$180,000-$230,000 CAD" with no USD equivalent -> Canada-only role -> NOT ELIGIBLE
+- "£70K-£90K" -> UK-only -> NOT ELIGIBLE
+- "€60K-€80K" -> EU country -> NOT ELIGIBLE
+USD-only or dual-currency postings (e.g. "$180K USD / CAD $230K") are fine.
+When in doubt, treat non-USD-only postings as country-restricted: Output
+RESULT:FAILED:not_eligible_location
 
 --- 3. EMPLOYER / "NEARSHORE" TRAP ---
 Some jobs say "Remote" but the EMPLOYER is hiring nearshore talent for North American clients -- they only want non-US workers. Red flags in the description:
