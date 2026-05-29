@@ -182,9 +182,32 @@ def _build_profile_summary(profile: dict) -> str:
         "Age 18+: Yes",
         "Background Check: Yes",
         "Felony: No",
-        "Previously Worked Here: No",
         "How Heard: Online Job Board",
     ])
+
+    # Past-employer truth set. "Previously Worked Here" / "Are you a current
+    # employee" / "Are you a former employee" / "Have you ever applied/worked"
+    # questions get answered against THIS list. Anything not in it -> No.
+    resume_facts = p.get("resume_facts", {})
+    past_companies = resume_facts.get("preserved_companies", [])
+    if past_companies:
+        lines.append(
+            "Previously Worked At (real, verifiable employment history -- "
+            "for 'have you worked here?' / current+former employee questions, "
+            "answer YES only if the asking company is in this list, otherwise NO): "
+            + ", ".join(past_companies)
+        )
+    else:
+        lines.append("Previously Worked Here: No")
+
+    # Company-type descriptors for "experience at a <type> company?" questions
+    # (SaaS, B2B, agency, FAANG, etc.) so the agent can match honestly instead
+    # of defaulting to No when the resume doesn't literally use the category word.
+    desc_map = resume_facts.get("company_descriptions", {})
+    if desc_map:
+        lines.append("Company Types (for 'experience at X type of company?' questions):")
+        for co, desc in desc_map.items():
+            lines.append(f"  - {co}: {desc}")
 
     # EEO
     lines.append(f"Gender: {eeo.get('gender', 'Decline to self-identify')}")
@@ -324,6 +347,27 @@ Hard facts -> answer truthfully from the profile. No guessing. This includes:
   - Citizenship, clearance, licenses, certifications: answer from profile only
   - Criminal/background: answer from profile only
 
+Employment-history questions (CRITICAL -- NEVER fabricate prior employment) ->
+  - "Have you ever worked at [Company]?" / "Are you a current employee?" /
+    "Are you a former employee?" / "Have you applied here before?" ->
+    Read the "Previously Worked At" line in the APPLICANT PROFILE. The asking
+    company is the company you're applying TO right now (see JOB block).
+    Answer YES only if that company is in the list. Otherwise: NO.
+    The cover letter and tailored resume MENTION the target company
+    extensively -- that is NOT evidence of past employment, it's the role
+    pitch. Do NOT mistake repeated mentions for employment history.
+  - "Years of experience" / "Years at most recent role" -> use what's on the
+    resume; never inflate.
+
+Company-type questions ("Do you have experience at a SaaS company?", "B2B
+experience?", "Startup experience?", "FAANG?", "Agency?", etc.) ->
+  Read the "Company Types" map in the APPLICANT PROFILE. If ANY past company
+  matches the asked-about type, answer YES. Software the candidate has built
+  for paying business customers IS B2B experience even if the resume doesn't
+  literally say "B2B". A cloud platform serving multiple recurring customers
+  IS SaaS even if the resume doesn't literally say "SaaS". Don't over-narrow
+  on category labels.
+
 Skills and tools -> be confident. This candidate is a {target_role} with {years} years experience. If the question asks "Do you have experience with [tool]?" and it's in the same domain (DevOps, backend, ML, cloud, automation), answer YES. Software engineers learn tools fast. Don't sell short.
 
 Open-ended questions ("Why do you want this role?", "Tell us about yourself", "What interests you?") -> Write 2-3 sentences. Be specific to THIS job. Reference something from the job description. Connect it to a real achievement from the resume. No generic fluff. No "I am passionate about..." -- sound like a real person.
@@ -355,7 +399,15 @@ def _build_hard_rules(profile: dict) -> str:
         name_rule += f' Preferred name = {preferred_name}. Use "{display_name}" unless a field specifically says "legal name".'
 
     return f"""== HARD RULES (never break these) ==
-1. Never lie about: citizenship, work authorization, criminal history, education credentials, security clearance, licenses.
+1. Never lie about: citizenship, work authorization, criminal history, education credentials, security clearance, licenses, OR employment history. Specifically:
+   - NEVER claim past or current employment at a company not in the candidate's
+     APPLICANT PROFILE "Previously Worked At" list. That list is the complete,
+     verifiable truth set for the candidate's job history.
+   - For "Have you ever worked at [Company]?" / "Are you a current or former
+     employee?" / "Have you applied before?" -> if the asking company is NOT
+     in "Previously Worked At" the answer is NO, period. The fact that the
+     cover letter / tailored resume mentions the target company many times
+     is NOT evidence of past employment; it is the pitch for the new role.
 2. {work_auth_rule}
 3. {name_rule}"""
 
