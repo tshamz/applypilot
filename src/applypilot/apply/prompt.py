@@ -149,6 +149,28 @@ def _build_profile_summary(profile: dict) -> str:
     if exp.get("education_level"):
         lines.append(f"Education: {exp['education_level']}")
 
+    # Employment status — explicit so the agent doesn't auto-fill "Current
+    # Company" with the most recent employer when the candidate is between roles.
+    is_employed = exp.get("currently_employed")
+    if is_employed is False:
+        lines.append("Currently Employed: No (between roles)")
+        most_recent_company = exp.get("most_recent_company", "")
+        most_recent_title = exp.get("most_recent_title", "")
+        if most_recent_company:
+            lines.append(f"Most Recent Company: {most_recent_company}")
+        if most_recent_title:
+            lines.append(f"Most Recent Title: {most_recent_title}")
+    elif is_employed is True:
+        lines.append("Currently Employed: Yes")
+        # When employed, current_company and current_title come from the most
+        # recent role -- form labels are usually fine either way.
+        cur_company = exp.get("most_recent_company") or exp.get("current_company", "")
+        cur_title = exp.get("most_recent_title") or exp.get("current_title", "")
+        if cur_company:
+            lines.append(f"Current Company: {cur_company}")
+        if cur_title:
+            lines.append(f"Current Title: {cur_title}")
+
     # Availability
     lines.append(f"Available: {avail.get('earliest_start_date', 'Immediately')}")
     lines.append(f"Available for Full-Time: {_yes_no(avail.get('available_for_full_time', True))}")
@@ -629,18 +651,88 @@ def build_prompt(job: dict, tailored_resume: str,
     # Preferred display name (same logic as _build_hard_rules)
     display_name = _resolve_display_name(personal)
 
-    # Dry-run: override submit instruction
+    # Dry-run overrides. The single weak "don't click submit" instruction
+    # buried in step 10 lost to a dozen "Submit the application" mentions
+    # elsewhere -- agents followed the dominant signal and submitted anyway.
+    # Now: a giant banner at the very top, a hard rule near the top of the
+    # rules list, and a softened step 10 that no longer says "click Submit".
     if dry_run:
-        submit_instruction = "IMPORTANT: Do NOT click the final Submit/Apply button. Review the form, verify all fields, then output RESULT:APPLIED with a note that this was a dry run."
+        opener = (
+            "You are running in DRY-RUN mode for testing. Your mission is to "
+            "navigate the application, fill every field correctly, and STOP "
+            "at the review screen WITHOUT submitting. Submitting in dry-run "
+            "mode is a hard failure."
+        )
+        dry_run_banner = (
+            "\n\n"
+            "============================================================\n"
+            "  ⚠️  DRY RUN MODE  ⚠️\n"
+            "============================================================\n"
+            "  DO NOT submit this application. DO NOT click Submit / Apply /\n"
+            "  Send / Finish / Complete / any final action button.\n"
+            "\n"
+            "  Your job is to: navigate to the application form, fill every\n"
+            "  field, then STOP at the final review screen. Output\n"
+            "  RESULT:APPLIED with the note (dry-run: stopped before submit).\n"
+            "\n"
+            "  If you find yourself about to click a final-action button --\n"
+            "  STOP. Take a snapshot of the review state and output the\n"
+            "  RESULT instead.\n"
+            "============================================================\n"
+        )
+        submit_instruction = (
+            "DRY-RUN MODE -- DO NOT click Submit/Apply/Send/Finish. Take a "
+            "snapshot of the fully-filled review screen, then output "
+            "RESULT:APPLIED with the note (dry-run: stopped before submit)."
+        )
     else:
-        submit_instruction = "BEFORE clicking Submit/Apply, take a snapshot and review EVERY field on the page. Verify all data matches the APPLICANT PROFILE and TAILORED RESUME -- name, email, phone, location, work auth, resume uploaded, cover letter if applicable. If anything is wrong or missing, fix it FIRST. Only click Submit after confirming everything is correct."
+        opener = (
+            "You are an autonomous job application agent. Your ONE mission: "
+            "get this candidate an interview. You have all the information "
+            "and tools. Think strategically. Act decisively. Submit the "
+            "application."
+        )
+        dry_run_banner = ""
+        submit_instruction = (
+            "BEFORE clicking Submit/Apply, take a snapshot and review EVERY "
+            "field on the page. Verify all data matches the APPLICANT "
+            "PROFILE and TAILORED RESUME -- name, email, phone, location, "
+            "work auth, resume uploaded, cover letter if applicable. If "
+            "anything is wrong or missing, fix it FIRST. Only click Submit "
+            "after confirming everything is correct."
+        )
 
     # Prefer the real hiring employer (resolved during cover-letter generation
     # for aggregator-sourced jobs) over the scrape source. Falls back to site
     # for jobs from Workday/Greenhouse/direct sources where site IS the employer.
     company = (job.get("employer_name") or job.get("site") or "Unknown").strip()
 
-    prompt = f"""You are an autonomous job application agent. Your ONE mission: get this candidate an interview. You have all the information and tools. Think strategically. Act decisively. Submit the application.
+    # When dry-run is on, also soften the "submit the application" mission
+    # statements that compete with the dry-run banner.
+    if dry_run:
+        mission_block = (
+            "== YOUR MISSION ==\n"
+            "Navigate to the application form. Fill every field accurately "
+            "using the profile, resume, and cover letter. Then STOP at the "
+            "review screen without submitting. Output RESULT:APPLIED with "
+            "the note (dry-run: stopped before submit).\n\n"
+            "If something unexpected happens, figure it out yourself -- "
+            "navigate, read content, try buttons. The goal is to reach the "
+            "review screen with a complete form, NOT to submit."
+        )
+    else:
+        mission_block = (
+            "== YOUR MISSION ==\n"
+            "Submit a complete, accurate application. Use the profile and "
+            "resume as source data -- adapt to fit each form's format.\n\n"
+            "If something unexpected happens and these instructions don't "
+            "cover it, figure it out yourself. You are autonomous. Navigate "
+            "pages, read content, try buttons, explore the site. The goal is "
+            "always the same: submit the application. Do whatever it takes "
+            "to reach that goal."
+        )
+
+    prompt = f"""{opener}{dry_run_banner}
 
 == JOB ==
 URL: {job.get('application_url') or job['url']}
@@ -662,10 +754,7 @@ Cover Letter PDF (upload if asked): {cl_upload_path or "N/A"}
 == APPLICANT PROFILE ==
 {profile_summary}
 
-== YOUR MISSION ==
-Submit a complete, accurate application. Use the profile and resume as source data -- adapt to fit each form's format.
-
-If something unexpected happens and these instructions don't cover it, figure it out yourself. You are autonomous. Navigate pages, read content, try buttons, explore the site. The goal is always the same: submit the application. Do whatever it takes to reach that goal.
+{mission_block}
 
 {hard_rules}
 
@@ -706,6 +795,9 @@ If something unexpected happens and these instructions don't cover it, figure it
 7. Upload cover letter if there's a field for it. Text field -> paste the cover letter text. File upload -> use the cover letter PDF path.
 8. Check ALL pre-filled fields. ATS systems parse your resume and auto-fill -- it's often WRONG.
    - "Current Job Title" or "Most Recent Title" -> use the title from the TAILORED RESUME summary, NOT whatever the parser guessed.
+   - "Current Company" / "Currently work at" / "Where do you currently work?" (present tense) -> read the APPLICANT PROFILE's "Currently Employed" line. If "No (between roles)", leave blank, write "N/A", or use "Between roles" (whichever the field accepts). DO NOT put the most-recent company there -- that would contradict the resume's end date and read as sloppy.
+   - "Most Recent Company" / "Last Employer" / "Previous Company" / "Current OR most recent" -> use the "Most Recent Company" from the APPLICANT PROFILE.
+   - "Are you currently employed?" Yes/No -> use the profile's "Currently Employed" answer verbatim.
    - Compare every other field to the APPLICANT PROFILE. Fix mismatches. Fill empty fields.
 9. Answer screening questions using the rules above.
 10. {submit_instruction}
