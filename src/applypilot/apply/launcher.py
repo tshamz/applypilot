@@ -677,7 +677,16 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
         except Exception as e:
             logger.exception("Worker %d launcher error", worker_id)
             add_event(f"[W{worker_id}] Launcher error: {str(e)[:40]}")
-            release_lock(job["url"])
+            # Record the crash as a permanent failure so the row leaves the
+            # queue cleanly. Previously we only released the lock, which left
+            # the row in NULL/idle state -- the next pass would just re-claim
+            # it and likely crash again the same way.
+            crash_reason = f"crashed:{type(e).__name__}:{str(e)[:80]}"
+            try:
+                mark_result(job["url"], "failed", crash_reason, permanent=True)
+            except Exception:
+                # If even mark_result fails, fall back to just releasing the lock.
+                release_lock(job["url"])
             failed += 1
             update_state(worker_id, jobs_failed=failed)
         finally:
