@@ -216,7 +216,7 @@ def apply(
         if not target:
             console.print("[red]--gen requires --url to specify which job.[/red]")
             raise typer.Exit(code=1)
-        prompt_file = gen_prompt(target, min_score=min_score, model=model)
+        prompt_file = gen_prompt(target, min_score=min_score, model=model, dry_run=dry_run)
         if not prompt_file:
             console.print("[red]No matching job found for that URL.[/red]")
             raise typer.Exit(code=1)
