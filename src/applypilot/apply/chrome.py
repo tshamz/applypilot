@@ -111,7 +111,7 @@ def setup_worker_profile(worker_id: int) -> Path:
         Path to the worker's Chrome user-data directory.
     """
     profile_dir = config.CHROME_WORKER_DIR / f"worker-{worker_id}"
-    if (profile_dir / "Default").exists():
+    if (profile_dir / config.CHROME_PROFILE).exists():
         return profile_dir  # Already initialized
 
     # Find a source: prefer existing worker (has session cookies), else user profile
@@ -120,7 +120,7 @@ def setup_worker_profile(worker_id: int) -> Path:
         if wid == worker_id:
             continue
         candidate = config.CHROME_WORKER_DIR / f"worker-{wid}"
-        if (candidate / "Default").exists():
+        if (candidate / config.CHROME_PROFILE).exists():
             source = candidate
             break
     if source is None:
@@ -165,7 +165,7 @@ def _suppress_restore_nag(profile_dir: Path) -> None:
     Chrome writes exit_type=Crashed when killed, which triggers a
     'Restore pages?' prompt on next launch. This patches it out.
     """
-    prefs_file = profile_dir / "Default" / "Preferences"
+    prefs_file = profile_dir / config.CHROME_PROFILE / "Preferences"
     if not prefs_file.exists():
         return
 
@@ -215,7 +215,7 @@ def launch_chrome(worker_id: int, port: int | None = None,
         chrome_exe,
         f"--remote-debugging-port={port}",
         f"--user-data-dir={profile_dir}",
-        "--profile-directory=Default",
+        f"--profile-directory={config.CHROME_PROFILE}",
         "--no-first-run",
         "--no-default-browser-check",
         "--window-size=1024,768",

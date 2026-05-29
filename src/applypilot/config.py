@@ -25,6 +25,14 @@ LOG_DIR = APP_DIR / "logs"
 CHROME_WORKER_DIR = APP_DIR / "chrome-workers"
 APPLY_WORKER_DIR = APP_DIR / "apply-workers"
 
+# Which sub-profile inside the worker's user-data-dir to launch with. Default
+# is the eponymous "Default" profile that Chrome creates for fresh users. Set
+# CHROME_PROFILE=Profile 1 (or similar) when the worker dir was seeded by
+# cloning a real Chrome user-data-dir that already had a non-Default profile
+# signed in -- the worker will use those existing sessions instead of
+# starting from a blank profile.
+CHROME_PROFILE = os.environ.get("CHROME_PROFILE", "Default")
+
 # Package-shipped config (YAML registries)
 PACKAGE_DIR = Path(__file__).parent
 CONFIG_DIR = PACKAGE_DIR / "config"
